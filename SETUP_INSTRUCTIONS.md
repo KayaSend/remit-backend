@@ -307,3 +307,10 @@ psql -U remit_user -d remit_production -f db/01_schema.sql
 - [ ] Test script runs successfully
 
 Once all boxes are checked, you have a production-ready database layer! 🎉
+
+| Stage             | DB `status`                            | DB `onchain_status` | What triggers it                               |
+| ----------------- | -------------------------------------- | ------------------- | ---------------------------------------------- |
+| Created           | `created`                              | `pending`           | POST `/payment-requests`                       |
+| USDC sent         | `pending_approval` → updated by worker | `broadcasted`       | USDC spender worker sends on-chain transaction |
+| Offramp initiated | `processing`                           | `broadcasted`       | POST `/offramp/pay`                            |
+| Offramp completed | `completed`                            | `broadcasted`       | MPESA callback calls `completeMpesaPayment`    |

@@ -53,13 +53,17 @@ export async function offrampRoutes(fastify: FastifyInstance) {
 
       // Use the transaction hash from payment request if not provided
       const txHash = transactionHash || paymentRequest.onchain_transaction_hash;
-      
+
       if (!txHash) {
         throw new Error('No transaction hash found');
       }
 
       // 2️⃣ Call Pretium
-     const pretiumRes = await disburseKes();
+      const pretiumRes = await disburseKes({
+        phone: phoneNumber,
+        amountKes: actualAmountKes,
+        transactionHash: txHash,
+      });
 
       // 3️⃣ Store offramp transaction
       await client.query(

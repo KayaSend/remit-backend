@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 
+
 import authPlugin from './plugins/auth';
 import { authRoutes } from './routes/auth.js';
 import { escrowRoutes } from './routes/escrows.js';

@@ -1,13 +1,8 @@
-// src/services/onchainService.ts
 import { ethers } from 'ethers';
 
 const BASE_RPC_URL = process.env.BASE_RPC_URL!;
 const BASE_USDC_CONTRACT = process.env.BASE_USDC_CONTRACT!;
 const PRIVATE_KEY = process.env.BASE_PRIVATE_KEY!;
-
-if (!BASE_RPC_URL) throw new Error('BASE_RPC_URL is not set');
-if (!BASE_USDC_CONTRACT) throw new Error('BASE_USDC_CONTRACT is not set');
-if (!PRIVATE_KEY) throw new Error('BASE_PRIVATE_KEY is not set');
 
 interface SendBaseUsdcParams {
   toAddress: string;
@@ -27,6 +22,7 @@ export async function sendBaseUsdcTransaction({
 
   const erc20Abi = [
     'function transfer(address to, uint256 amount) returns (bool)',
+    'function balanceOf(address owner) view returns (uint256)',
     'function decimals() view returns (uint8)',
   ];
 
@@ -35,8 +31,11 @@ export async function sendBaseUsdcTransaction({
   const decimals = await usdc.decimals();
   const amount = ethers.parseUnits(amountUsd.toFixed(6), decimals);
 
-  const tx = await usdc.transfer(toAddress, amount);
+  const balance = await usdc.balanceOf(wallet.address);
+  if (balance < amount) {
+    throw new Error('Insufficient USDC balance for transfer');
+  }
 
-  // 🚨 DO NOT wait
+  const tx = await usdc.transfer(toAddress, amount);
   return tx.hash;
 }
