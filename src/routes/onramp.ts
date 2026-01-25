@@ -1,13 +1,16 @@
 import { FastifyInstance } from 'fastify';
 import { pool } from '../services/database';
 import { initiateKesOnRamp, getExchangeRate } from '../services/pretium';
+import { authMiddleware } from '../middleware/auth.js';
+
 
 const SETTLEMENT_WALLET = process.env.BACKEND_SETTLEMENT_WALLET!;
 
 export async function onrampRoutes(fastify: FastifyInstance) {
-  fastify.post('/kes', async (req, reply) => {
+  fastify.post('/kes',{ preHandler: authMiddleware }, async (req, reply) => {
     const { phone_number, escrow_id } = req.body as any;
-    const userId = req.headers['x-user-id'];
+    const userId = req.user!.userId;
+
 
     if (!userId) {
       return reply.code(401).send({ error: 'Unauthorized' });

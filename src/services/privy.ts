@@ -22,11 +22,14 @@ export async function sendOTP(phone: string): Promise<{ success: boolean; otpSen
 }
 
 // Mock OTP verification
-export async function verifyOTP(phone: string, otp: string): Promise<{ token: string; userId: string }> {
+export async function verifyOTP(
+  phone: string,
+  otp: string
+): Promise<{ token: string; phone: string }> {
   console.log(`[MOCK] Verifying OTP for ${phone}: ${otp}`);
-  // In real implementation, this would call Privy's API
+
   return {
     token: 'mock-jwt-token',
-    userId: uuidv4()
+    phone
   };
 }

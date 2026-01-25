@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { pool } from '../services/database';
+import { withIdempotency } from '../services/redis';
 
 interface PretiumOfframpPayload {
   transaction_code: string;
@@ -8,92 +9,63 @@ interface PretiumOfframpPayload {
 }
 
 export async function pretiumOfframpWebhookRoutes(fastify: FastifyInstance) {
-  fastify.post('/webhooks/pretium/offramp', async (request, reply) => {
-    const payload = request.body as PretiumOfframpPayload;
+  fastify.post('/webhooks/pretium/offramp', async (req, reply) => {
+    const payload = req.body as PretiumOfframpPayload;
 
     if (!payload?.transaction_code) {
       return reply.code(400).send({ error: 'Missing transaction_code' });
     }
 
-    const client = await pool.connect();
+    return withIdempotency(req, reply, 'pretium_offramp', payload.transaction_code, async () => {
+      const client = await pool.connect();
 
-    try {
-      await client.query('BEGIN');
+      try {
+        await client.query('BEGIN');
 
-      const txRes = await client.query(
-        `
-        SELECT *
-        FROM offramp_transactions
-        WHERE pretium_transaction_code = $1
-        FOR UPDATE
-        `,
-        [payload.transaction_code]
-      );
+        const txRes = await client.query(
+          `SELECT * FROM offramp_transactions WHERE pretium_transaction_code = $1 FOR UPDATE`,
+          [payload.transaction_code]
+        );
 
-      if (txRes.rows.length === 0) {
-        throw new Error('Unknown offramp transaction');
-      }
+        if (!txRes.rows.length) throw new Error('Unknown offramp transaction');
 
-      const tx = txRes.rows[0];
+        const tx = txRes.rows[0];
 
-      if (tx.status === 'completed') {
-        await client.query('COMMIT');
-        return reply.send({ ok: true });
-      }
+        if (payload.status !== 'SUCCESS') {
+          await client.query(
+            `UPDATE offramp_transactions SET status='failed', updated_at=NOW() WHERE offramp_transaction_id=$1`,
+            [tx.offramp_transaction_id]
+          );
 
-      if (payload.status !== 'SUCCESS') {
+          await client.query(
+            `UPDATE payment_requests SET status='failed' WHERE payment_request_id=$1`,
+            [tx.payment_request_id]
+          );
+
+          await client.query('COMMIT');
+          return reply.send({ ok: true });
+        }
+
         await client.query(
-          `
-          UPDATE offramp_transactions
-          SET status = 'failed', updated_at = NOW()
-          WHERE offramp_transaction_id = $1
-          `,
-          [tx.offramp_transaction_id]
+          `UPDATE offramp_transactions SET status='completed', mpesa_receipt=$1, completed_at=NOW() WHERE offramp_transaction_id=$2`,
+          [payload.mpesa_receipt, tx.offramp_transaction_id]
         );
 
         await client.query(
-          `
-          UPDATE payment_requests
-          SET status = 'failed'
-          WHERE payment_request_id = $1
-          `,
+          `UPDATE payment_requests SET status='completed' WHERE payment_request_id=$1`,
           [tx.payment_request_id]
         );
 
         await client.query('COMMIT');
         return reply.send({ ok: true });
+
+      } catch (err: any) {
+        await client.query('ROLLBACK');
+        fastify.log.error(err);
+        return reply.code(400).send({ error: err.message });
+      } finally {
+        client.release();
       }
-
-      // ✅ Success
-      await client.query(
-        `
-        UPDATE offramp_transactions
-        SET status = 'completed',
-            mpesa_receipt = $1,
-            completed_at = NOW()
-        WHERE offramp_transaction_id = $2
-        `,
-        [payload.mpesa_receipt, tx.offramp_transaction_id]
-      );
-
-      await client.query(
-        `
-        UPDATE payment_requests
-        SET status = 'completed'
-        WHERE payment_request_id = $1
-        `,
-        [tx.payment_request_id]
-      );
-
-      await client.query('COMMIT');
-      return reply.send({ ok: true });
-
-    } catch (err: any) {
-      await client.query('ROLLBACK');
-      fastify.log.error(err);
-      return reply.code(400).send({ error: err.message });
-    } finally {
-      client.release();
-    }
+    });
   });
 }

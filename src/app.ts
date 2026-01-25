@@ -2,7 +2,6 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 
 
-import authPlugin from './plugins/auth';
 import { authRoutes } from './routes/auth.js';
 import { escrowRoutes } from './routes/escrows.js';
 import { paymentRequestRoutes } from './routes/paymentRequests';
@@ -24,8 +23,7 @@ export async function buildApp() {
 
   initPrivy();
 
-  // 🔐 Auth plugin
-  await fastify.register(authPlugin);
+
 
   // Health
   fastify.get('/health', async () => ({ status: 'ok' }));
