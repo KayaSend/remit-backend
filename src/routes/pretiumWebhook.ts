@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { pool } from '../services/database';
+import { redis, withIdempotency } from '../services/redis'; // import
 
 interface PretiumWebhookPayload {
   transaction_code: string;
@@ -17,105 +18,61 @@ export async function pretiumWebhookRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'Missing transaction_code' });
     }
 
-    const client = await pool.connect();
+    return withIdempotency(req, reply, 'pretium', payload.transaction_code, async () => {
+      const client = await pool.connect();
 
-    try {
-      await client.query('BEGIN');
+      try {
+        await client.query('BEGIN');
 
-      // 1️⃣ Lock onramp transaction
-      const onrampRes = await client.query(
-        `
-        SELECT *
-        FROM onramp_transactions
-        WHERE pretium_transaction_code = $1
-        FOR UPDATE
-        `,
-        [payload.transaction_code]
-      );
+        const onrampRes = await client.query(
+          `SELECT * FROM onramp_transactions WHERE pretium_transaction_code = $1 FOR UPDATE`,
+          [payload.transaction_code]
+        );
 
-      if (onrampRes.rows.length === 0) {
-        throw new Error('Unknown transaction_code');
-      }
+        if (!onrampRes.rows.length) {
+          throw new Error('Unknown transaction_code');
+        }
 
-      const onramp = onrampRes.rows[0];
+        const onramp = onrampRes.rows[0];
 
-      // 2️⃣ Idempotency
-      if (onramp.status === 'confirmed') {
-        await client.query('COMMIT');
-        return reply.code(200).send({ ok: true });
-      }
+        if (payload.status !== 'success') {
+          await client.query(
+            `UPDATE onramp_transactions SET status = 'failed', webhook_payload = $1, failed_at = NOW(), error_message = 'Pretium reported failure', updated_at = NOW() WHERE onramp_transaction_id = $2`,
+            [payload, onramp.onramp_transaction_id]
+          );
 
-      // 3️⃣ Validate success
-      if (payload.status !== 'success') {
+          await client.query('COMMIT');
+          return reply.code(200).send({ ok: true });
+        }
+
+        const receivedUsdCents = Math.round(Number(payload.amount_usdc) * 100);
+
+        if (receivedUsdCents < onramp.expected_usdc_cents) {
+          throw new Error(
+            `Underfunded escrow: expected=${onramp.expected_usdc_cents}, received=${receivedUsdCents}`
+          );
+        }
+
         await client.query(
-          `
-          UPDATE onramp_transactions
-          SET
-            status = 'failed',
-            webhook_payload = $1,
-            failed_at = NOW(),
-            error_message = 'Pretium reported failure',
-            updated_at = NOW()
-          WHERE onramp_transaction_id = $2
-          `,
+          `UPDATE onramp_transactions SET status = 'confirmed', webhook_payload = $1, confirmed_at = NOW(), updated_at = NOW() WHERE onramp_transaction_id = $2`,
           [payload, onramp.onramp_transaction_id]
         );
 
+        await client.query(
+          `UPDATE escrows SET status = 'active', updated_at = NOW() WHERE escrow_id = $1 AND status = 'pending_deposit'`,
+          [onramp.escrow_id]
+        );
+
         await client.query('COMMIT');
         return reply.code(200).send({ ok: true });
+
+      } catch (err: any) {
+        await client.query('ROLLBACK');
+        fastify.log.error(err);
+        return reply.code(400).send({ error: err.message });
+      } finally {
+        client.release();
       }
-
-      // 4️⃣ Validate chain
-      if (payload.chain !== onramp.chain) {
-        throw new Error('Chain mismatch');
-      }
-
-      // 5️⃣ Validate amount
-      const receivedUsdCents = Math.round(Number(payload.amount_usdc) * 100);
-
-      if (receivedUsdCents < onramp.expected_usdc_cents) {
-        throw new Error(
-          `Underfunded escrow: expected=${onramp.expected_usdc_cents}, received=${receivedUsdCents}`
-        );
-      }
-
-      // 6️⃣ Confirm onramp transaction
-      await client.query(
-        `
-        UPDATE onramp_transactions
-        SET
-          status = 'confirmed',
-          webhook_payload = $1,
-          confirmed_at = NOW(),
-          updated_at = NOW()
-        WHERE onramp_transaction_id = $2
-        `,
-        [payload, onramp.onramp_transaction_id]
-      );
-
-      // 7️⃣ Activate escrow
-      await client.query(
-        `
-        UPDATE escrows
-        SET
-          status = 'active',
-          updated_at = NOW()
-        WHERE escrow_id = $1
-          AND status = 'pending_deposit'
-        `,
-        [onramp.escrow_id]
-      );
-
-      await client.query('COMMIT');
-
-      return reply.code(200).send({ ok: true });
-
-    } catch (err: any) {
-      await client.query('ROLLBACK');
-      fastify.log.error(err);
-      return reply.code(400).send({ error: err.message });
-    } finally {
-      client.release();
-    }
+    });
   });
 }

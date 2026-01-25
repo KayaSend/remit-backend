@@ -1,8 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import { completeMpesaPayment } from '../services/database';
+import { withIdempotency } from '../services/redis'; // import your wrapper
 
 export async function webhookRoutes(fastify: FastifyInstance) {
-  // M-Pesa webhook
+  // M-Pesa webhook with Redis idempotency
   fastify.post('/mpesa', async (request, reply) => {
     console.log('[WEBHOOK:MPESA] Received:', JSON.stringify(request.body, null, 2));
 
@@ -17,37 +18,39 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       }
 
       const conversationId = result.ConversationID || result.OriginatorConversationID;
-      const resultCode = result.ResultCode;
-
-      if (resultCode === 0) {
-        // Success
-        const transactionId = result.TransactionID;
-
-        await completeMpesaPayment(conversationId, transactionId, payload);
-
-        fastify.log.info(`M-Pesa payment completed: ${transactionId}`);
-      } else {
-        // Failed
-        fastify.log.error(`M-Pesa payment failed: ${result.ResultDesc}`);
-
-        // TODO: Update payment status to 'failed'
+      if (!conversationId) {
+        return reply.code(400).send({ error: 'Missing ConversationID' });
       }
 
-      return { received: true };
+      // Idempotency wrapper
+      return withIdempotency(request, reply, 'mpesa', conversationId, async () => {
+        const resultCode = result.ResultCode;
 
+        if (resultCode === 0) {
+          // Success
+          const transactionId = result.TransactionID;
+          await completeMpesaPayment(conversationId, transactionId, payload);
+
+          fastify.log.info(`M-Pesa payment completed: ${transactionId}`);
+        } else {
+          // Failed
+          fastify.log.error(`M-Pesa payment failed: ${result.ResultDesc}`);
+
+          // Optional: update payment status to 'failed' in DB if needed
+        }
+
+        return reply.code(200).send({ ok: true });
+      });
     } catch (error: any) {
       fastify.log.error('M-Pesa webhook error:', error);
       return reply.code(500).send({ error: error.message });
     }
   });
 
-  // Pretium webhook
+  // Pretium webhook (leave for now)
   fastify.post('/pretium', async (request, reply) => {
     console.log('[WEBHOOK:PRETIUM] Received:', JSON.stringify(request.body, null, 2));
-
-    // TODO: verify signature (important)
-    // TODO: handle onramp/offramp events
-
+    // TODO: verify signature and handle onramp/offramp events
     return { received: true };
   });
 }
