@@ -6,6 +6,11 @@ import { authMiddleware } from '../middleware/auth.js';
 
 const SETTLEMENT_WALLET = process.env.BACKEND_SETTLEMENT_WALLET!;
 
+// IMPORTANT: This endpoint only initiates onramp.
+// It must NEVER finalize transaction or escrow state.
+// Webhooks are authoritative.
+
+
 export async function onrampRoutes(fastify: FastifyInstance) {
   fastify.post('/kes',{ preHandler: authMiddleware }, async (req, reply) => {
     const { phone_number, escrow_id } = req.body as any;

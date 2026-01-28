@@ -86,14 +86,14 @@ export async function offrampRoutes(fastify: FastifyInstance) {
       );
 
       // 4️⃣ Mark payment request as processing
-      await client.query(
-        `
-        UPDATE payment_requests
-        SET status = 'processing'
-        WHERE payment_request_id = $1
-        `,
-        [paymentRequestId]
-      );
+      // await client.query(
+      //   `
+      //   UPDATE payment_requests
+      //   SET status = 'processing'
+      //   WHERE payment_request_id = $1
+      //   `,
+        // [paymentRequestId]
+      // );
 
       await client.query('COMMIT');
 

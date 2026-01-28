@@ -1,4 +1,3 @@
-// /home/ken/Projects/remit_backend/src/routes/paymentRequests.ts
 import { FastifyInstance } from 'fastify';
 import { pool } from '../services/database';
 import { createPaymentRequestWithDailyLimit } from '../services/dailySpendService';
@@ -8,19 +7,20 @@ import { authMiddleware } from '../middleware/auth';
 
 const PRETIUM_BASE_URL = process.env.PRETIUM_BASE_URL!;
 
-async function fetchOfframpStatus(transactionCode: string): Promise<'completed' | 'pending' | 'failed'> {
+async function fetchOfframpStatus(
+  transactionCode: string
+): Promise<'completed' | 'pending' | 'failed'> {
   try {
     const res = await axios.post(`${PRETIUM_BASE_URL}/v1/status/KES`, {
       transaction_code: transactionCode,
     });
 
     const status = res.data?.data?.status;
-
     if (status === 'COMPLETE') return 'completed';
     if (status === 'PENDING') return 'pending';
     return 'failed';
-  } catch (err) {
-    return 'pending'; // fallback if API fails
+  } catch {
+    return 'pending';
   }
 }
 
@@ -77,9 +77,7 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           amountUsdCents: body.amountUsdCents,
           userId: request.user!.userId,
         },
-        {
-          jobId: paymentRequest.paymentRequestId,
-        }
+        { jobId: paymentRequest.paymentRequestId }
       );
 
       return reply.status(202).send({
@@ -91,10 +89,11 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
   );
 
   // =========================
-  // FETCH PAYMENT STATUS (User-Friendly)
+  // FETCH PAYMENT STATUS (READ ONLY)
   // =========================
   fastify.get(
     '/payment-requests/:id',
+<<<<<<< HEAD
     { preHandler: authMiddleware },
     async (request, reply) => {
       const { id } = request.params as { id: string };
@@ -166,10 +165,89 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           status: userFriendlyStatus,
           onchain_status: row.onchain_status,
           transaction_hash: row.onchain_transaction_hash,
+=======
+    { preHandler: fastify.authenticate },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+
+      const { rows } = await pool.query(
+        `
+        SELECT
+          pr.payment_request_id,
+          pr.status,
+          pr.onchain_status,
+          pr.onchain_transaction_hash
+        FROM payment_requests pr
+        WHERE pr.payment_request_id = $1
+        `,
+        [id]
+      );
+
+      if (!rows.length) {
+        return reply.status(404).send({ error: 'Payment request not found' });
+      }
+
+      const pr = rows[0];
+
+      const { rows: offRows } = await pool.query(
+        `
+        SELECT *
+        FROM offramp_transactions
+        WHERE payment_request_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [id]
+      );
+
+      const offrampTx = offRows[0];
+      let offrampStatus = offrampTx?.status ?? null;
+
+      if (offrampTx?.pretium_transaction_code) {
+        const remoteStatus = await fetchOfframpStatus(
+          offrampTx.pretium_transaction_code
+        );
+
+        if (remoteStatus !== offrampTx.status) {
+          fastify.log.warn(
+            {
+              local: offrampTx.status,
+              remote: remoteStatus,
+              transactionCode: offrampTx.pretium_transaction_code,
+            },
+            'Offramp status mismatch'
+          );
+
+        }
+
+        offrampStatus = remoteStatus;
+      }
+
+      const userFriendlyStatus = (() => {
+        if (pr.onchain_status === 'broadcasted' && offrampStatus === 'completed')
+          return 'completed';
+        if (pr.onchain_status === 'broadcasted')
+          return 'onchain_done_offramp_pending';
+        if (pr.onchain_status === 'pending')
+          return 'onchain_pending';
+        return pr.status;
+      })();
+
+      return reply.send({
+        success: true,
+        data: {
+          payment_request_id: pr.payment_request_id,
+          status: userFriendlyStatus,
+          onchain_status: pr.onchain_status,
+          transaction_hash: pr.onchain_transaction_hash,
+>>>>>>> c6c91a6 (changes in the backend)
           offramp_status: offrampStatus,
         },
       });
     }
   );
+<<<<<<< HEAD
 
+=======
+>>>>>>> c6c91a6 (changes in the backend)
 }
