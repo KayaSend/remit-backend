@@ -42,10 +42,12 @@ export async function authMiddleware(
       verifiedPhone,
       'Unknown User'
     );
-
     request.user = { userId };
-    return;
+    // ✅ DON'T RETURN - continue to route handler
+  } else {
+    request.user = { userId: user.userId };
+    // ✅ DON'T RETURN - continue to route handler
   }
 
-  request.user = { userId: user.userId };
+  // ✅ Middleware completed successfully - continue to next handler
 }
