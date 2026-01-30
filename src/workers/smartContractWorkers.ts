@@ -12,7 +12,8 @@ import {
 } from '../services/onchainService.js';
 import ContractDeploymentService from '../services/contractDeploymentService.js';
 
-const redis = new IORedis(process.env.REDIS_URL || 'redis://127.0.0.1:6379');
+// Only create Redis connection if REDIS_URL is provided
+const redis = process.env.REDIS_URL ? new IORedis(process.env.REDIS_URL) : null;
 const SIMPLE_ESCROW_ADDRESS = process.env.SIMPLE_ESCROW_ADDRESS!;
 const PRETIUM_BASE_URL = process.env.PRETIUM_API_URL!;
 const PRETIUM_API_KEY = process.env.PRETIUM_API_KEY!;

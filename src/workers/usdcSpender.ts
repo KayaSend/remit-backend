@@ -4,12 +4,13 @@ import axios from 'axios';
 import { pool } from '../services/database.js';
 import { sendBaseUsdcTransaction } from '../services/onchainService.js';
 
-const redis = new IORedis(process.env.REDIS_URL || 'redis://127.0.0.1:6379');
+// Only create Redis connection if REDIS_URL is provided  
+const redis = process.env.REDIS_URL ? new IORedis(process.env.REDIS_URL) : null;
 
 const PRETIUM_BASE_URL = process.env.PRETIUM_API_URL!;
 const PRETIUM_API_KEY = process.env.PRETIUM_API_KEY!;
 
-export const usdcSpenderWorker = new Worker(
+export const usdcSpenderWorker = redis ? new Worker(
   'usdc-spend',
   async job => {
     console.log('➡️ Processing job', job.id, job.data);
@@ -98,15 +99,19 @@ export const usdcSpenderWorker = new Worker(
       throw err;
     }
   },
-  {
-    connection: { host: '127.0.0.1', port: 6379 },
+  redis ? {
+    connection: redis,
     concurrency: 1,
-  }
-);
+  } : undefined
+) : null;
 
-usdcSpenderWorker.on('ready', () => {
+if (usdcSpenderWorker) {
+  usdcSpenderWorker.on('ready', () => {
     console.log('USDC spender worker ready');
-});
+  });
+} else {
+  console.log('USDC spender worker disabled - no Redis connection');
+}
 
 usdcSpenderWorker.on('failed', (job, err) => {
     console.error('USDC job failed', job?.id, err.message);

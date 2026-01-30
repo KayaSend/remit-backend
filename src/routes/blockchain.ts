@@ -11,15 +11,16 @@ import ContractDeploymentService from '../services/contractDeploymentService.js'
 import contractEventMonitor, { ContractEventMonitor } from '../services/contractEventMonitor.js';
 import { Queue } from 'bullmq';
 import { authMiddleware } from '../middleware/auth.js';
+import { redis } from '../services/redis.js';
 
-// Admin queues
-const adminQueue = new Queue('escrow-refund', { 
-  connection: { host: '127.0.0.1', port: 6379 } 
-});
+// Admin queues (only create if Redis is available)
+const adminQueue = redis ? new Queue('escrow-refund', { 
+  connection: redis 
+}) : null;
 
-const deploymentQueue = new Queue('contract-deployment', { 
-  connection: { host: '127.0.0.1', port: 6379 } 
-});
+const deploymentQueue = redis ? new Queue('contract-deployment', { 
+  connection: redis 
+}) : null;
 
 export async function blockchainRoutes(fastify: FastifyInstance) {
 
