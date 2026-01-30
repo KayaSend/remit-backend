@@ -1,51 +1,45 @@
 #!/usr/bin/env node
 
-// Debug script to find the actual server location
-import { resolve } from 'path';
-import { existsSync } from 'fs';
+// Debug script to diagnose build failure
 import { execSync } from 'child_process';
 
-console.log('🔍 DEBUGGING RENDER DIRECTORY STRUCTURE');
+console.log('🔍 DIAGNOSING BUILD FAILURE');
 console.log('Current working directory:', process.cwd());
 
 try {
-  console.log('\n📁 Listing current directory:');
+  console.log('\n📁 Current directory contents:');
   console.log(execSync('ls -la', { encoding: 'utf-8' }));
 
-  console.log('\n📁 Looking for dist directories:');
-  console.log(execSync('find . -name "dist" -type d 2>/dev/null || echo "No dist directories found"', { encoding: 'utf-8' }));
+  console.log('\n📦 Check package.json build script:');
+  console.log(execSync('cat package.json | grep -A5 -B5 "build"', { encoding: 'utf-8' }));
 
-  console.log('\n📁 Looking for server.js files:');
-  console.log(execSync('find . -name "server.js" -type f 2>/dev/null || echo "No server.js files found"', { encoding: 'utf-8' }));
+  console.log('\n📁 Check if src directory exists:');
+  console.log(execSync('ls -la src/ | head -10', { encoding: 'utf-8' }));
 
-  console.log('\n📁 Check if build actually ran - looking for any .js files:');
-  console.log(execSync('find . -name "*.js" -not -path "./node_modules/*" 2>/dev/null || echo "No JS files found outside node_modules"', { encoding: 'utf-8' }));
+  console.log('\n🔧 Check TypeScript compiler:');
+  console.log(execSync('npx tsc --version', { encoding: 'utf-8' }));
 
-  console.log('\n🔧 Running build manually to see what happens:');
-  console.log(execSync('npm run build', { encoding: 'utf-8' }));
+  console.log('\n📋 Check tsconfig.json:');
+  console.log(execSync('cat tsconfig.json', { encoding: 'utf-8' }));
 
-  console.log('\n📁 After build - listing current directory again:');
-  console.log(execSync('ls -la', { encoding: 'utf-8' }));
-
-  console.log('\n📁 After build - looking for dist:');
-  console.log(execSync('find . -name "dist" -type d 2>/dev/null || echo "Still no dist found"', { encoding: 'utf-8' }));
-
-  console.log('\n📁 After build - looking for server.js:');
-  const serverFiles = execSync('find . -name "server.js" -type f 2>/dev/null || echo "No server.js found"', { encoding: 'utf-8' });
-  console.log(serverFiles);
-
-  // Try to find and run the server
-  const serverPath = serverFiles.split('\n').find(line => line.includes('server.js') && !line.includes('node_modules'));
-  if (serverPath && serverPath.trim()) {
-    console.log(`\n🚀 Found server at: ${serverPath.trim()}`);
-    console.log('Starting server...');
-    await import(resolve(serverPath.trim()));
-  } else {
-    console.error('❌ No server.js file found after build!');
-    process.exit(1);
-  }
+  console.log('\n🔧 Try running tsc directly:');
+  console.log(execSync('npx tsc 2>&1', { encoding: 'utf-8' }));
 
 } catch (error) {
-  console.error('Error during debugging:', error.message);
-  process.exit(1);
+  console.error('Command failed:', error.message);
+  console.error('stderr:', error.stderr?.toString());
+  console.error('stdout:', error.stdout?.toString());
+  
+  // Try fallback - just run the server directly from src
+  console.log('\n🚨 Build failed, trying to run from source:');
+  try {
+    await import('./src/server.js');
+  } catch (srcError) {
+    try {
+      await import('./server.ts');
+    } catch (tsError) {
+      console.error('❌ Cannot run from source either');
+      process.exit(1);
+    }
+  }
 }
