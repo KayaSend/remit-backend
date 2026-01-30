@@ -4,6 +4,7 @@ import Redis from 'ioredis';
 // Get Redis URL from environment (Upstash provides this)
 const redisUrl = process.env.REDIS_URL || process.env.UPSTASH_REDIS_REST_URL;
 
+// Only create Redis connection if URL is provided
 export const redis = redisUrl 
   ? new Redis(redisUrl, {
       // Upstash requires these settings
@@ -20,36 +21,32 @@ export const redis = redisUrl
       maxRetriesPerRequest: 3,
       enableReadyCheck: true,
     })
-  : // Fallback to local Redis for development
-    new Redis({
-      host: process.env.REDIS_HOST || '127.0.0.1',
-      port: Number(process.env.REDIS_PORT) || 6379,
-      password: process.env.REDIS_PASSWORD || undefined,
-      connectTimeout: 10000,
-      retryStrategy: (times) => Math.min(times * 100, 3000),
-    });
+  : null; // No Redis connection if URL not provided
 
-// Event handlers for debugging
-redis.on('connect', () => {
-  console.log('✅ Redis: Connected successfully');
-});
+// Only add event handlers if Redis exists
+if (redis) {
+  redis.on('connect', () => {
+    console.log('✅ Redis: Connected successfully');
+  });
 
-redis.on('error', (error) => {
-  console.error('❌ Redis error:', error.message);
-});
+  redis.on('error', (error) => {
+    console.error('❌ Redis error:', error.message);
+  });
 
-redis.on('ready', () => {
-  console.log('✅ Redis: Ready for commands');
-});
+  redis.on('ready', () => {
+    console.log('✅ Redis: Ready for commands');
+  });
 
-redis.on('close', () => {
-  console.log('🔌 Redis: Connection closed');
-});
+  redis.on('close', () => {
+    console.log('🔌 Redis: Connection closed');
+  });
 
-redis.on('reconnecting', (delay: number) => {
-  console.log(`🔄 Redis: Reconnecting in ${delay}ms`);
-});
-
+  redis.on('reconnecting', (delay: number) => {
+    console.log(`🔄 Redis: Reconnecting in ${delay}ms`);
+  });
+} else {
+  console.log('⚠️ Redis: No REDIS_URL provided, running without Redis');
+}
 
 export async function withIdempotency(
   req: FastifyRequest,
@@ -59,6 +56,12 @@ export async function withIdempotency(
   handler: () => Promise<any>
 ) {
   const key = `webhook:${provider}:${transactionCode}`;
+
+  // If no Redis, just run the handler
+  if (!redis) {
+    console.log('⚠️ Redis not available, skipping idempotency check');
+    return handler();
+  }
 
   try {
     const exists = await redis.exists(key);
