@@ -6,8 +6,8 @@
       "ES2022"
     ],
     "moduleResolution": "node",
-    "outDir": "../dist",
-    "rootDir": ".",
+    "outDir": "./dist",
+    "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -18,11 +18,12 @@
     "sourceMap": true
   },
   "include": [
-    "./**/*",
-    "./tests"
+    "src/**/*",
+    "src/tests"
   ],
   "exclude": [
     "node_modules",
-    "../dist"
+    "dist",
+    "scripts"
   ]
 }
