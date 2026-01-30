@@ -3,3 +3,12 @@ dist/
 .env
 *.log
 .DS_Store
+
+# Heap snapshots and debugging files
+*.heapsnapshot
+*.heap
+Heap-*.heapsnapshot
+
+# Other debug files
+*.cpuprofile
+*.dmp
