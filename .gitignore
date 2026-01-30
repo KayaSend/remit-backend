@@ -12,3 +12,26 @@ Heap-*.heapsnapshot
 # Other debug files
 *.cpuprofile
 *.dmp
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Coverage and test reports
+coverage/
+.nyc_output/
+
+# Environment files
+.env.local
+.env.production
+.env.test
