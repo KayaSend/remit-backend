@@ -13,13 +13,21 @@ import { Queue } from 'bullmq';
 import { authMiddleware } from '../middleware/auth.js';
 
 // Admin queues (only create if Redis is available)
-const adminQueue = process.env.REDIS_URL ? new Queue('escrow-refund', { 
-  connection: { url: process.env.REDIS_URL }
-}) : null;
+let adminQueue: Queue | null = null;
+let deploymentQueue: Queue | null = null;
 
-const deploymentQueue = process.env.REDIS_URL ? new Queue('contract-deployment', { 
-  connection: { url: process.env.REDIS_URL }
-}) : null;
+try {
+  if (process.env.REDIS_URL) {
+    adminQueue = new Queue('escrow-refund', { 
+      connection: { url: process.env.REDIS_URL }
+    });
+    deploymentQueue = new Queue('contract-deployment', { 
+      connection: { url: process.env.REDIS_URL }
+    });
+  }
+} catch (error) {
+  console.warn('⚠️ Failed to create admin queues:', (error as any).message);
+}
 
 export async function blockchainRoutes(fastify: FastifyInstance) {
 
