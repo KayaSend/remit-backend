@@ -1,11 +1,32 @@
 import 'dotenv/config';
 import { buildApp } from './app.js';
-// 🔥 START WORKERS
-import './workers/usdcSpender.js';
-import './workers/smartContractWorkers.js';
+
+// 🔥 ONLY START WORKERS IF REDIS IS AVAILABLE
+if (process.env.REDIS_URL) {
+  console.log('✅ Redis configured - initializing workers');
+  import('./workers/usdcSpender.js');
+  import('./workers/smartContractWorkers.js');
+} else {
+  console.log('⚠️ Redis not configured - workers disabled');
+}
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
+
+// 🔍 Log startup configuration for debugging
+console.log('\n📋 Startup Configuration:');
+console.log('  NODE_ENV:', process.env.NODE_ENV || 'development');
+console.log('  PORT:', PORT);
+console.log('  HOST:', HOST);
+console.log('  Redis Setup:');
+console.log('    REDIS_URL:', process.env.REDIS_URL ? '✅ SET' : '❌ NOT SET');
+if (process.env.REDIS_URL) {
+  const redisUrl = process.env.REDIS_URL;
+  const urlObj = new URL(redisUrl);
+  console.log('    Redis Host:', urlObj.hostname);
+  console.log('    Redis Port:', urlObj.port || '6379');
+}
+console.log('');
 
 async function start() {
   try {
