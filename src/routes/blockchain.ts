@@ -162,33 +162,37 @@ export async function blockchainRoutes(fastify: FastifyInstance) {
         return reply.code(401).send({ error: 'Unauthorized' });
       }
 
-      try {
-        // Check if user owns the escrow
-        const { rows } = await pool.query(
-          'SELECT sender_user_id FROM escrows WHERE escrow_id = $1',
-          [id]
-        );
+       try {
+         // Check if user owns the escrow
+         const { rows } = await pool.query(
+           'SELECT sender_user_id FROM escrows WHERE escrow_id = $1',
+           [id]
+         );
 
-        if (!rows.length || rows[0].sender_user_id !== userId) {
-          return reply.code(403).send({ error: 'Access denied' });
-        }
+         if (!rows.length || rows[0].sender_user_id !== userId) {
+           return reply.code(403).send({ error: 'Access denied' });
+         }
 
-        // Queue refund job
-        await adminQueue.add(
-          'refund-escrow',
-          {
-            escrowId: id,
-            reason: reason || 'User requested refund',
-            requestedByUserId: userId,
-          },
-          {
-            attempts: 3,
-            backoff: {
-              type: 'exponential',
-              delay: 2000,
-            },
-          }
-        );
+         // Queue refund job (only if Redis is available)
+         if (!adminQueue) {
+           return reply.code(503).send({ error: 'Queue service unavailable' });
+         }
+
+         await adminQueue.add(
+           'refund-escrow',
+           {
+             escrowId: id,
+             reason: reason || 'User requested refund',
+             requestedByUserId: userId,
+           },
+           {
+             attempts: 3,
+             backoff: {
+               type: 'exponential',
+               delay: 2000,
+             },
+           }
+         );
 
         return {
           success: true,
@@ -226,24 +230,34 @@ export async function blockchainRoutes(fastify: FastifyInstance) {
         });
       }
 
-      try {
-        // Queue deployment job
-        await deploymentQueue.add(
-          'deploy-contract',
-          {
-            backendServiceAddress,
-            feeCollectorAddress,
-            deployerAddress: deployerAddress || '0x0000000000000000000000000000000000000000',
-            deployedByUserId: userId,
-          },
-          {
-            attempts: 2,
-            backoff: {
-              type: 'exponential',
-              delay: 5000,
-            },
-          }
-        );
+       try {
+         if (!backendServiceAddress || !feeCollectorAddress) {
+           return reply.code(400).send({ 
+             error: 'backendServiceAddress and feeCollectorAddress are required' 
+           });
+         }
+
+         // Queue deployment job (only if Redis is available)
+         if (!deploymentQueue) {
+           return reply.code(503).send({ error: 'Queue service unavailable' });
+         }
+
+         await deploymentQueue.add(
+           'deploy-contract',
+           {
+             backendServiceAddress,
+             feeCollectorAddress,
+             deployerAddress: deployerAddress || '0x0000000000000000000000000000000000000000',
+             deployedByUserId: userId,
+           },
+           {
+             attempts: 2,
+             backoff: {
+               type: 'exponential',
+               delay: 5000,
+             },
+           }
+         );
 
         return {
           success: true,
