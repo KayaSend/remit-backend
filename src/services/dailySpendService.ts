@@ -335,7 +335,7 @@ export async function getBulkDailySpendStatus(recipientIds: string[]): Promise<R
   });
 
   // Update with actual data
-  result.rows.forEach(row => {
+  result.rows.forEach((row: any) => {
     statuses[row.recipient_id] = {
       dailyLimitCents: Number(row.daily_limit_usd_cents),
       spentTodayCents: Number(row.spent_today_usd_cents),

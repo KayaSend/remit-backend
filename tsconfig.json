@@ -18,12 +18,12 @@
     "sourceMap": true
   },
   "include": [
-    "src/**/*",
-    "src/tests"
+    "src/**/*"
   ],
   "exclude": [
     "node_modules",
     "dist",
-    "scripts"
+    "scripts",
+    "src/tests"
   ]
 }

@@ -329,7 +329,7 @@ export async function blockchainRoutes(fastify: FastifyInstance) {
         return {
           success: true,
           data: {
-            events: rows.map(row => ({
+            events: rows.map((row: any) => ({
               ...row,
               event_data: JSON.parse(row.event_data || '{}'),
             })),
