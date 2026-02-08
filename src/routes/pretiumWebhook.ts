@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { pool } from '../services/database.js';
-import { redis, withIdempotency } from '../services/redis.js'; // import
+import { withIdempotency } from '../services/redis.js';
+import { hashForLookup } from '../utils/crypto.js';
 
 interface PretiumWebhookPayload {
   transaction_code: string;
@@ -11,7 +12,9 @@ interface PretiumWebhookPayload {
 }
 
 export async function pretiumWebhookRoutes(fastify: FastifyInstance) {
-  fastify.post('/webhooks/pretium', async (req, reply) => {
+  // NOTE: buildApp() registers this plugin with prefix `/webhooks/pretium`.
+  // Keep the route path as `/` to avoid double-prefixing.
+  fastify.post('/', async (req, reply) => {
     const payload = req.body as PretiumWebhookPayload;
 
     if (!payload?.transaction_code) {
@@ -52,6 +55,19 @@ export async function pretiumWebhookRoutes(fastify: FastifyInstance) {
           }
 
           // Create escrow now (single transaction)
+          const recipientHash = hashForLookup(String(intent.recipient_phone));
+          const recipientRes = await client.query(
+            `SELECT recipient_id
+             FROM recipients
+             WHERE created_by_user_id = $1 AND phone_number_hash = $2
+             LIMIT 1`,
+            [intent.sender_user_id, recipientHash],
+          );
+
+          if (!recipientRes.rows.length) {
+            throw new Error('Recipient not found for funding intent');
+          }
+
           const escrowRes = await client.query(
             `INSERT INTO escrows (
                sender_user_id,
@@ -66,21 +82,21 @@ export async function pretiumWebhookRoutes(fastify: FastifyInstance) {
                activated_at
              )
              VALUES (
-               $1,
-               (SELECT recipient_id FROM recipients WHERE phone_number_encrypted = $2 LIMIT 1),
-               $3,
-               $3,
-               0,
-               'active',
-               NOW() + INTERVAL '90 days',
-               $4,
-               NOW(),
-               NOW()
+                $1,
+                $2,
+                $3,
+                $3,
+                0,
+                'active',
+                NOW() + INTERVAL '90 days',
+                $4,
+                NOW(),
+                NOW()
              )
              RETURNING escrow_id`,
             [
               intent.sender_user_id,
-              intent.recipient_phone,
+              recipientRes.rows[0].recipient_id,
               Number(intent.total_amount_usd_cents),
               intent.memo,
             ],

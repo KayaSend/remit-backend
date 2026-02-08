@@ -46,11 +46,4 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       return reply.code(500).send({ error: error.message });
     }
   });
-
-  // Pretium webhook (leave for now)
-  fastify.post('/pretium', async (request, reply) => {
-    console.log('[WEBHOOK:PRETIUM] Received:', JSON.stringify(request.body, null, 2));
-    // TODO: verify signature and handle onramp/offramp events
-    return { received: true };
-  });
 }

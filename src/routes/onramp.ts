@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { pool } from '../services/database.js';
 import { initiateKesOnRamp, getExchangeRate } from '../services/pretium.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { hashForLookup } from '../utils/crypto.js';
 
 
 const SETTLEMENT_WALLET = process.env.BACKEND_SETTLEMENT_WALLET!;
@@ -37,6 +38,19 @@ export async function onrampRoutes(fastify: FastifyInstance) {
 
     if (typeof recipient_phone !== 'string' || !recipient_phone.startsWith('+254')) {
       return reply.code(400).send({ error: 'Invalid recipient phone format' });
+    }
+
+    // Ensure recipient exists and belongs to sender (prevents webhook-time failure)
+    const recipientHash = hashForLookup(recipient_phone);
+    const recipientCheck = await pool.query(
+      `SELECT recipient_id
+       FROM recipients
+       WHERE created_by_user_id = $1 AND phone_number_hash = $2
+       LIMIT 1`,
+      [userId, recipientHash],
+    );
+    if (!recipientCheck.rows.length) {
+      return reply.code(400).send({ error: 'Recipient not found' });
     }
 
     const totalUsd = Number(total_amount_usd);
