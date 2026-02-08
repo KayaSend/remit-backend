@@ -6,6 +6,8 @@ declare module 'fastify' {
     user?: {
       userId: string;
     };
+    /** Phone number from auth (used for recipient lookup) */
+    recipientPhone?: string;
   }
 }
 
@@ -48,6 +50,10 @@ export async function authMiddleware(
     request.user = { userId: user.userId };
     // ✅ DON'T RETURN - continue to route handler
   }
+
+  // Phase 1: Attach verified phone for recipient lookups
+  // Phase 2: This will come from JWT claims
+  request.recipientPhone = verifiedPhone;
 
   // ✅ Middleware completed successfully - continue to next handler
 }

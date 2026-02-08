@@ -549,6 +549,159 @@ export async function findUserByPhone(phone: string): Promise<any | null> {
 }
 
 /**
+ * Find recipient by phone number (for recipient login flow)
+ */
+export async function findRecipientByPhone(phone: string): Promise<any | null> {
+    const phoneHash = hashForLookup(phone);
+
+    const result = await pool.query(
+        `SELECT
+            r.recipient_id,
+            r.created_by_user_id,
+            r.phone_number_encrypted,
+            r.full_name_encrypted,
+            r.is_verified,
+            r.country_code
+         FROM recipients r
+         WHERE r.phone_number_hash = $1
+         LIMIT 1`,
+        [phoneHash]
+    );
+
+    if (result.rows.length === 0) {
+        return null;
+    }
+
+    const row = result.rows[0];
+
+    return {
+        recipientId: row.recipient_id,
+        createdByUserId: row.created_by_user_id,
+        phone: decrypt(row.phone_number_encrypted),
+        fullName: decrypt(row.full_name_encrypted),
+        isVerified: row.is_verified,
+        countryCode: row.country_code
+    };
+}
+
+/**
+ * Get recipient dashboard data (aggregated across all active escrows)
+ * Production-ready: single query for efficiency, handles edge cases
+ */
+export async function getRecipientDashboard(recipientId: string): Promise<{
+    recipient: { id: string; phone: string; name: string };
+    dailySpend: {
+        limitUsd: number;
+        spentTodayUsd: number;
+        remainingTodayUsd: number;
+        transactionCount: number;
+    };
+    categories: Array<{
+        category: string;
+        allocatedUsd: number;
+        spentUsd: number;
+        remainingUsd: number;
+        escrowCount: number;
+    }>;
+    activeEscrows: Array<{
+        escrowId: string;
+        totalUsd: number;
+        remainingUsd: number;
+        expiresAt: Date;
+        categories: string[];
+    }>;
+}> {
+    // 1. Get recipient info
+    const recipientResult = await pool.query(
+        `SELECT recipient_id, phone_number_encrypted, full_name_encrypted
+         FROM recipients WHERE recipient_id = $1`,
+        [recipientId]
+    );
+
+    if (recipientResult.rows.length === 0) {
+        throw new Error('Recipient not found');
+    }
+
+    const recipientRow = recipientResult.rows[0];
+    const recipient = {
+        id: recipientRow.recipient_id,
+        phone: decrypt(recipientRow.phone_number_encrypted),
+        name: decrypt(recipientRow.full_name_encrypted)
+    };
+
+    // 2. Get daily spend status
+    const dailyResult = await pool.query(
+        `SELECT
+            COALESCE(daily_limit_usd_cents, 50000) as limit_cents,
+            COALESCE(spent_today_usd_cents, 0) as spent_cents,
+            COALESCE(remaining_today_usd_cents, 50000) as remaining_cents,
+            COALESCE(transaction_count, 0) as tx_count
+         FROM daily_spend
+         WHERE recipient_id = $1 AND spend_date = CURRENT_DATE`,
+        [recipientId]
+    );
+
+    const dailySpend = dailyResult.rows.length > 0
+        ? {
+            limitUsd: Number(dailyResult.rows[0].limit_cents) / 100,
+            spentTodayUsd: Number(dailyResult.rows[0].spent_cents) / 100,
+            remainingTodayUsd: Number(dailyResult.rows[0].remaining_cents) / 100,
+            transactionCount: Number(dailyResult.rows[0].tx_count)
+        }
+        : { limitUsd: 500, spentTodayUsd: 0, remainingTodayUsd: 500, transactionCount: 0 };
+
+    // 3. Get per-category aggregates across ALL active escrows
+    const categoryResult = await pool.query(
+        `SELECT
+            sc.category_name,
+            SUM(sc.allocated_amount_usd_cents) as total_allocated,
+            SUM(sc.spent_amount_usd_cents) as total_spent,
+            SUM(sc.remaining_amount_usd_cents) as total_remaining,
+            COUNT(DISTINCT e.escrow_id) as escrow_count
+         FROM spending_categories sc
+         JOIN escrows e ON sc.escrow_id = e.escrow_id
+         WHERE e.recipient_id = $1 AND e.status = 'active'
+         GROUP BY sc.category_name
+         ORDER BY total_remaining DESC`,
+        [recipientId]
+    );
+
+    const categories = categoryResult.rows.map(row => ({
+        category: row.category_name,
+        allocatedUsd: Number(row.total_allocated) / 100,
+        spentUsd: Number(row.total_spent) / 100,
+        remainingUsd: Number(row.total_remaining) / 100,
+        escrowCount: Number(row.escrow_count)
+    }));
+
+    // 4. Get active escrows summary
+    const escrowResult = await pool.query(
+        `SELECT
+            e.escrow_id,
+            e.total_amount_usd_cents,
+            e.remaining_balance_usd_cents,
+            e.expires_at,
+            ARRAY_AGG(sc.category_name) as categories
+         FROM escrows e
+         LEFT JOIN spending_categories sc ON e.escrow_id = sc.escrow_id
+         WHERE e.recipient_id = $1 AND e.status = 'active'
+         GROUP BY e.escrow_id, e.total_amount_usd_cents, e.remaining_balance_usd_cents, e.expires_at
+         ORDER BY e.expires_at ASC`,
+        [recipientId]
+    );
+
+    const activeEscrows = escrowResult.rows.map(row => ({
+        escrowId: row.escrow_id,
+        totalUsd: Number(row.total_amount_usd_cents) / 100,
+        remainingUsd: Number(row.remaining_balance_usd_cents) / 100,
+        expiresAt: row.expires_at,
+        categories: row.categories || []
+    }));
+
+    return { recipient, dailySpend, categories, activeEscrows };
+}
+
+/**
  * Create recipient record
  */
 export async function createRecipient(
