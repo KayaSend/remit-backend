@@ -747,19 +747,51 @@ export async function getRecipientDashboard(recipientId: string): Promise<{
         : { limitUsd: 500, spentTodayUsd: 0, remainingTodayUsd: 500, transactionCount: 0 };
 
     // 3. Get per-category aggregates across ALL active escrows
-    // For payment requests, we pick the escrow with the most remaining balance for each category.
+    // Sum up totals for display, but also track the best escrow for payment requests
     const categoryResult = await pool.query(
-        `SELECT DISTINCT ON (sc.category_name)
-            sc.category_name,
-            sc.escrow_id,
-            sc.category_id,
-            sc.allocated_amount_usd_cents,
-            sc.spent_amount_usd_cents,
-            sc.remaining_amount_usd_cents
-         FROM spending_categories sc
-         JOIN escrows e ON sc.escrow_id = e.escrow_id
-         WHERE e.recipient_id = $1 AND e.status = 'active' AND sc.remaining_amount_usd_cents > 0
-         ORDER BY sc.category_name, sc.remaining_amount_usd_cents DESC`,
+        `WITH category_totals AS (
+            SELECT 
+                sc.category_name,
+                SUM(sc.allocated_amount_usd_cents) as total_allocated,
+                SUM(sc.spent_amount_usd_cents) as total_spent,
+                SUM(sc.remaining_amount_usd_cents) as total_remaining,
+                COUNT(*) as escrow_count
+            FROM spending_categories sc
+            JOIN escrows e ON sc.escrow_id = e.escrow_id
+            WHERE e.recipient_id = $1 AND e.status = 'active'
+            GROUP BY sc.category_name
+        ),
+        best_escrow AS (
+            SELECT DISTINCT ON (sc.category_name)
+                sc.category_name,
+                sc.escrow_id,
+                sc.category_id
+            FROM spending_categories sc
+            JOIN escrows e ON sc.escrow_id = e.escrow_id
+            WHERE e.recipient_id = $1 AND e.status = 'active' AND sc.remaining_amount_usd_cents > 0
+            ORDER BY sc.category_name, sc.remaining_amount_usd_cents DESC
+        )
+        SELECT 
+            ct.category_name,
+            COALESCE(be.escrow_id, (
+                SELECT sc2.escrow_id FROM spending_categories sc2 
+                JOIN escrows e2 ON sc2.escrow_id = e2.escrow_id
+                WHERE e2.recipient_id = $1 AND e2.status = 'active' AND sc2.category_name = ct.category_name
+                LIMIT 1
+            )) as escrow_id,
+            COALESCE(be.category_id, (
+                SELECT sc2.category_id FROM spending_categories sc2 
+                JOIN escrows e2 ON sc2.escrow_id = e2.escrow_id
+                WHERE e2.recipient_id = $1 AND e2.status = 'active' AND sc2.category_name = ct.category_name
+                LIMIT 1
+            )) as category_id,
+            ct.total_allocated,
+            ct.total_spent,
+            ct.total_remaining,
+            ct.escrow_count
+        FROM category_totals ct
+        LEFT JOIN best_escrow be ON ct.category_name = be.category_name
+        WHERE ct.total_remaining > 0`,
         [recipientId]
     );
 
@@ -767,11 +799,11 @@ export async function getRecipientDashboard(recipientId: string): Promise<{
         category: row.category_name,
         escrowId: row.escrow_id,
         categoryId: row.category_id,
-        allocatedUsd: Number(row.allocated_amount_usd_cents) / 100,
-        spentUsd: Number(row.spent_amount_usd_cents) / 100,
-        remainingUsd: Number(row.remaining_amount_usd_cents) / 100,
+        allocatedUsd: Number(row.total_allocated) / 100,
+        spentUsd: Number(row.total_spent) / 100,
+        remainingUsd: Number(row.total_remaining) / 100,
         dailyLimitUsd: dailySpend.limitUsd, // Use global daily limit from daily_spend table
-        escrowCount: 1
+        escrowCount: Number(row.escrow_count)
     }));
 
     // 4. Get active escrows summary
