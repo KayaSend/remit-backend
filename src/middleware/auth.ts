@@ -41,12 +41,16 @@ export async function authMiddleware(
     return '+254112285105';
   })();
 
+  // Phase 1: Derive a stable mock Privy user id per verified phone.
+  // This prevents unique constraint collisions across different mock logins.
+  const privyUserId = `mock-privy-user-id:${verifiedPhone}`;
+
   // Resolve user
   let user = await findUserByPhone(verifiedPhone);
 
   if (!user) {
     const userId = await createUser(
-      'mock-privy-user-id',
+      privyUserId,
       verifiedPhone,
       'Unknown User'
     );
