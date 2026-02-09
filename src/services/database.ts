@@ -691,9 +691,12 @@ export async function getRecipientDashboard(recipientId: string): Promise<{
     };
     categories: Array<{
         category: string;
+        escrowId: string;
+        categoryId: string;
         allocatedUsd: number;
         spentUsd: number;
         remainingUsd: number;
+        dailyLimitUsd: number | null;
         escrowCount: number;
     }>;
     activeEscrows: Array<{
@@ -744,27 +747,32 @@ export async function getRecipientDashboard(recipientId: string): Promise<{
         : { limitUsd: 500, spentTodayUsd: 0, remainingTodayUsd: 500, transactionCount: 0 };
 
     // 3. Get per-category aggregates across ALL active escrows
+    // For payment requests, we pick the escrow with the most remaining balance for each category.
     const categoryResult = await pool.query(
-        `SELECT
+        `SELECT DISTINCT ON (sc.category_name)
             sc.category_name,
-            SUM(sc.allocated_amount_usd_cents) as total_allocated,
-            SUM(sc.spent_amount_usd_cents) as total_spent,
-            SUM(sc.remaining_amount_usd_cents) as total_remaining,
-            COUNT(DISTINCT e.escrow_id) as escrow_count
+            sc.escrow_id,
+            sc.category_id,
+            sc.allocated_amount_usd_cents,
+            sc.spent_amount_usd_cents,
+            sc.remaining_amount_usd_cents,
+            sc.daily_limit_usd_cents
          FROM spending_categories sc
          JOIN escrows e ON sc.escrow_id = e.escrow_id
-         WHERE e.recipient_id = $1 AND e.status = 'active'
-         GROUP BY sc.category_name
-         ORDER BY total_remaining DESC`,
+         WHERE e.recipient_id = $1 AND e.status = 'active' AND sc.remaining_amount_usd_cents > 0
+         ORDER BY sc.category_name, sc.remaining_amount_usd_cents DESC`,
         [recipientId]
     );
 
     const categories = categoryResult.rows.map(row => ({
         category: row.category_name,
-        allocatedUsd: Number(row.total_allocated) / 100,
-        spentUsd: Number(row.total_spent) / 100,
-        remainingUsd: Number(row.total_remaining) / 100,
-        escrowCount: Number(row.escrow_count)
+        escrowId: row.escrow_id,
+        categoryId: row.category_id,
+        allocatedUsd: Number(row.allocated_amount_usd_cents) / 100,
+        spentUsd: Number(row.spent_amount_usd_cents) / 100,
+        remainingUsd: Number(row.remaining_amount_usd_cents) / 100,
+        dailyLimitUsd: row.daily_limit_usd_cents ? Number(row.daily_limit_usd_cents) / 100 : null,
+        escrowCount: 1
     }));
 
     // 4. Get active escrows summary
