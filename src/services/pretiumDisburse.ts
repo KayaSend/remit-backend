@@ -3,7 +3,7 @@ import axios from 'axios';
 const PRETIUM_BASE_URL = process.env.PRETIUM_API_URL!;
 const PRETIUM_API_KEY = process.env.PRETIUM_API_KEY!;
 const PRETIUM_CHAIN = 'BASE';
-const CALLBACK_URL = `${process.env.WEBHOOK_BASE_URL}/webhooks/pretium`;
+const CALLBACK_URL = `${process.env.WEBHOOK_BASE_URL}/webhooks/pretium/offramp`;
 
 if (!PRETIUM_BASE_URL) {
   throw new Error('PRETIUM_API_URL is not set');
