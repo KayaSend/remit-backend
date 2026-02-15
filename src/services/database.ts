@@ -860,6 +860,54 @@ export async function createRecipient(
     return result.rows[0].recipient_id;
 }
 // =====================================================
+// WALLET OPERATIONS
+// =====================================================
+
+/**
+ * Update user wallet address (idempotent — preserves first-config timestamp)
+ */
+export async function updateUserWallet(
+    userId: string,
+    walletAddress: string,
+    chainType: string = 'evm'
+): Promise<void> {
+    await pool.query(
+        `UPDATE users
+         SET wallet_address = $2,
+             wallet_chain_type = $3,
+             wallet_configured_at = COALESCE(wallet_configured_at, NOW()),
+             updated_at = NOW()
+         WHERE user_id = $1`,
+        [userId, walletAddress, chainType]
+    );
+}
+
+/**
+ * Get wallet info for a user
+ */
+export async function getUserWallet(userId: string): Promise<{
+    walletAddress: string | null;
+    chainType: string | null;
+    configuredAt: Date | null;
+} | null> {
+    const result = await pool.query(
+        `SELECT wallet_address, wallet_chain_type, wallet_configured_at
+         FROM users
+         WHERE user_id = $1`,
+        [userId]
+    );
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+        walletAddress: row.wallet_address,
+        chainType: row.wallet_chain_type,
+        configuredAt: row.wallet_configured_at,
+    };
+}
+
+// =====================================================
 // HEALTH CHECK & UTILITIES
 // =====================================================
 
