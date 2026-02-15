@@ -361,7 +361,7 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
         // Note: For one-time payments (rent/school), daily limit wasn't deducted
         const categoryResult = await client.query(
           `SELECT sc.category_name FROM spending_categories sc WHERE sc.category_id = $1`,
-          [paymentRequest.escrow_id]
+          [paymentRequest.category_id]
         );
         const categoryName = categoryResult.rows[0]?.category_name?.toLowerCase() || '';
         const isOneTimePayment = ['rent', 'school', 'school fees', 'education'].includes(categoryName);
