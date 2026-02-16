@@ -253,6 +253,7 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
             [paymentRequestId]
           );
           await client.query('COMMIT');
+          client.release();
 
           fastify.log.error({
             paymentRequestId,
@@ -353,6 +354,12 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           amountKes,
           status: 'processing',
         });
+      } catch (innerError: any) {
+        // Ensure client is released if still held (before USDC was sent)
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        try { client.release(); } catch (_) {}
+        throw innerError;
+      }
       } catch (handlerError: any) {
         fastify.log.error({ 
           error: handlerError, 
