@@ -18,6 +18,12 @@ async function fetchOfframpStatus(
   try {
     const res = await axios.post(`${PRETIUM_BASE_URL}/v1/status/KES`, {
       transaction_code: transactionCode,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': PRETIUM_API_KEY,
+      },
+      timeout: 10000,
     });
 
     const status = res.data?.data?.status;
@@ -424,13 +430,21 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
 
         // ✅ Update DB using the correct primary key column
         await pool.query(
-          `
-        UPDATE offramp_transactions
-        SET status = $1
-        WHERE offramp_transaction_id = $2
-        `,
+          `UPDATE offramp_transactions
+           SET status = $1
+           WHERE offramp_transaction_id = $2`,
           [offrampStatus, offrampTx.offramp_transaction_id]
         );
+
+        // Also update payment_request status when offramp completes
+        if (offrampStatus === 'completed' && row.status !== 'completed') {
+          await pool.query(
+            `UPDATE payment_requests
+             SET status = 'completed', updated_at = NOW()
+             WHERE payment_request_id = $1`,
+            [id]
+          );
+        }
       }
 
       // 4️⃣ Compute user-friendly status
