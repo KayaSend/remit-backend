@@ -40,32 +40,57 @@ export async function disburseKes({
     formattedPhone = '0' + phone.substring(3);
   }
 
-  const response = await axios.post(
-    `${PRETIUM_BASE_URL}/v1/pay/KES`,
-    {
-      type: 'MOBILE',
-      shortcode: formattedPhone,
-      amount: amountKes.toString(), // Convert to string
-      fee: '10', // Fee as string
-      mobile_network: 'Safaricom',
-      chain: PRETIUM_CHAIN,
-      transaction_hash: transactionHash,
-      callback_url: CALLBACK_URL,
-    },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': PRETIUM_API_KEY,
-      },
-      timeout: 15000,
+  const requestPayload = {
+    type: 'MOBILE',
+    shortcode: formattedPhone,
+    amount: amountKes.toString(), // Convert to string
+    fee: '10', // Fee as string
+    mobile_network: 'Safaricom',
+    chain: PRETIUM_CHAIN,
+    transaction_hash: transactionHash,
+    callback_url: CALLBACK_URL,
+  };
+
+  console.log('[Pretium] Sending disbursement request:', {
+    url: `${PRETIUM_BASE_URL}/v1/pay/KES`,
+    phone: formattedPhone.replace(/(\d{4}).*/, '$1***'),
+    amount: amountKes,
+    transactionHash: transactionHash.slice(0, 10) + '...',
+  });
+
+  try {
+    const response = await axios.post(
+      `${PRETIUM_BASE_URL}/v1/pay/KES`,
+      requestPayload,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': PRETIUM_API_KEY,
+        },
+        timeout: 15000,
+      }
+    );
+
+    const data = response.data;
+
+    if (!data || data.code !== 200) {
+      console.error('[Pretium] API returned non-200 code:', data);
+      throw new Error(data?.message || 'Pretium disburse failed');
     }
-  );
 
-  const data = response.data;
+    console.log('[Pretium] Disbursement successful:', {
+      transactionCode: data.data?.transaction_code,
+      status: data.data?.status,
+    });
 
-  if (!data || data.code !== 200) {
-    throw new Error(data?.message || 'Pretium disburse failed');
+    return data.data;
+  } catch (error: any) {
+    console.error('[Pretium] Disbursement error:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message,
+    });
+    throw error;
   }
-
-  return data.data;
 }
