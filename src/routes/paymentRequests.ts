@@ -230,6 +230,18 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           });
 
           fastify.log.info({ paymentRequestId, transactionHash }, 'USDC sent on-chain successfully');
+
+          // Store transaction hash immediately so it's not lost if Pretium fails
+          await client.query(
+            `UPDATE payment_requests
+             SET onchain_transaction_hash = $1,
+                 onchain_status = 'broadcasted',
+                 updated_at = NOW()
+             WHERE payment_request_id = $2`,
+            [transactionHash, paymentRequestId]
+          );
+          await client.query('COMMIT');
+          client.release();
         } catch (onchainError: any) {
           // Rollback status to approved if on-chain transfer fails
           await client.query(
@@ -263,7 +275,8 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           merchantAccount: merchantAccount.slice(0, 4) + '***'
         }, 'Calling Pretium disburseKes');
 
-        // Call Pretium to initiate M-Pesa disbursement
+        // Call Pretium to initiate M-Pesa disbursement (hash already saved)
+        const client2 = await pool.connect();
         let pretiumResponse;
         try {
           pretiumResponse = await disburseKes({
@@ -271,77 +284,65 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
             amountKes,
             transactionHash,
           });
-          fastify.log.info({ 
-            paymentRequestId, 
-            transactionCode: pretiumResponse?.transaction_code 
+          fastify.log.info({
+            paymentRequestId,
+            transactionCode: pretiumResponse?.transaction_code
           }, 'Pretium disbursement successful');
         } catch (pretiumError: any) {
-          fastify.log.error({ 
-            paymentRequestId, 
+          fastify.log.error({
+            paymentRequestId,
             error: pretiumError?.message,
-            stack: pretiumError?.stack 
+            stack: pretiumError?.stack
           }, 'Pretium disbursement failed');
-          // Rollback status to approved if Pretium fails — funds are already deducted
-          await client.query(
-            `UPDATE payment_requests
-             SET status = 'approved',
-                 onchain_status = 'pending',
-                 updated_at = NOW()
-             WHERE payment_request_id = $1`,
-            [paymentRequestId]
-          );
-          await client.query('COMMIT');
+          // USDC already sent and hash stored. Keep processing status.
+          client2.release();
 
           fastify.log.error('Pretium disbursement failed:', pretiumError);
           return reply.status(202).send({
             success: true,
             paymentRequestId,
             paymentId: paymentRequestId,
-            status: 'approved',
-            error: 'M-Pesa disbursement failed, payment approved but not yet sent',
+            status: 'processing',
+            error: 'M-Pesa disbursement failed, USDC sent but M-Pesa pending retry',
           });
         }
 
         // Store offramp transaction
-        await client.query(
-          `INSERT INTO offramp_transactions (
-            payment_request_id,
-            pretium_transaction_code,
-            phone_number,
-            amount_kes_cents,
-            status,
-            created_at
-          ) VALUES ($1, $2, $3, $4, 'pending', NOW())`,
-          [paymentRequestId, pretiumResponse.transaction_code, merchantAccount, prRows[0].amount_kes_cents]
-        );
+        try {
+          await client2.query('BEGIN');
 
-        // Update payment request with transaction hash
-        await client.query(
-          `UPDATE payment_requests
-           SET onchain_status = 'broadcasted',
-               onchain_transaction_hash = $1,
-               updated_at = NOW()
-           WHERE payment_request_id = $2`,
-          [transactionHash, paymentRequestId]
-        );
+          await client2.query(
+            `INSERT INTO offramp_transactions (
+              payment_request_id,
+              pretium_transaction_code,
+              phone_number,
+              amount_kes_cents,
+              status,
+              created_at
+            ) VALUES ($1, $2, $3, $4, 'pending', NOW())`,
+            [paymentRequestId, pretiumResponse.transaction_code, merchantAccount, prRows[0].amount_kes_cents]
+          );
 
-        // Audit log
-        await client.query(
-          `INSERT INTO audit_logs (user_id, escrow_id, payment_request_id, action, resource_type, resource_id, status, new_values)
-           VALUES ($1, $2, $3, 'payment_request.auto_executed', 'payment_requests', $3, 'success', $4)`,
-          [
-            null, // System auto-approval
-            body.escrowId,
-            paymentRequestId,
-            JSON.stringify({
-              amount_kes: amountKes,
+          // Audit log
+          await client2.query(
+            `INSERT INTO audit_logs (user_id, escrow_id, payment_request_id, action, resource_type, resource_id, status, new_values)
+             VALUES ($1, $2, $3, 'payment_request.auto_executed', 'payment_requests', $3, 'success', $4)`,
+            [
+              null, // System auto-approval
+              body.escrowId,
+              paymentRequestId,
+              JSON.stringify({
+                amount_kes: amountKes,
               pretium_transaction_code: pretiumResponse.transaction_code,
               transaction_hash: transactionHash,
             }),
           ]
         );
 
-        await client.query('COMMIT');
+          await client2.query('COMMIT');
+        } finally {
+          client2.release();
+        }
 
         return reply.status(202).send({
           success: true,
@@ -352,13 +353,6 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           amountKes,
           status: 'processing',
         });
-      } catch (error: any) {
-        await client.query('ROLLBACK');
-        fastify.log.error('Auto-execute error:', error);
-        return reply.status(500).send({ error: error.message, paymentRequestId });
-      } finally {
-        client.release();
-      }
       } catch (handlerError: any) {
         fastify.log.error({ 
           error: handlerError, 
@@ -811,6 +805,20 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           });
 
           fastify.log.info({ id, transactionHash }, 'USDC sent on-chain for execute');
+
+          // Store transaction hash immediately so it's not lost if Pretium fails
+          await client.query(
+            `UPDATE payment_requests
+             SET onchain_transaction_hash = $1,
+                 onchain_status = 'broadcasted',
+                 updated_at = NOW()
+             WHERE payment_request_id = $2`,
+            [transactionHash, id]
+          );
+          await client.query('COMMIT');
+
+          // Re-acquire client for Pretium call (hash is safely stored)
+          client.release();
         } catch (onchainError: any) {
           await client.query(
             `UPDATE payment_requests
@@ -829,6 +837,7 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
         }
 
         // 7. Call Pretium to initiate M-Pesa disbursement
+        const client2 = await pool.connect();
         let pretiumResponse;
         try {
           pretiumResponse = await disburseKes({
@@ -837,16 +846,15 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
             transactionHash,
           });
         } catch (pretiumError: any) {
-          // Rollback status if Pretium call fails
-          await client.query(
+          // USDC already sent, keep hash but mark as needing retry
+          await client2.query(
             `UPDATE payment_requests
-             SET status = 'approved',
-                 onchain_status = 'pending',
+             SET status = 'processing',
                  updated_at = NOW()
              WHERE payment_request_id = $1`,
             [id]
           );
-          await client.query('COMMIT');
+          client2.release();
 
           fastify.log.error('Pretium disbursement failed:', pretiumError);
           return reply.status(502).send({
@@ -854,51 +862,47 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // 8. Store offramp transaction
-        await client.query(
-          `INSERT INTO offramp_transactions (
-            payment_request_id,
-            pretium_transaction_code,
-            phone_number,
-            amount_kes_cents,
-            status,
-            created_at
-          ) VALUES ($1, $2, $3, $4, 'pending', NOW())`,
-          [
-            id,
-            pretiumResponse.transaction_code,
-            merchantAccount,
-            paymentRequest.amount_kes_cents,
-          ]
-        );
+        // 8. Store offramp transaction and audit log
+        try {
+          await client2.query('BEGIN');
 
-        // 9. Update payment request with transaction hash
-        await client.query(
-          `UPDATE payment_requests
-           SET onchain_status = 'broadcasted',
-               onchain_transaction_hash = $1,
-               updated_at = NOW()
-           WHERE payment_request_id = $2`,
-          [transactionHash, id]
-        );
+          await client2.query(
+            `INSERT INTO offramp_transactions (
+              payment_request_id,
+              pretium_transaction_code,
+              phone_number,
+              amount_kes_cents,
+              status,
+              created_at
+            ) VALUES ($1, $2, $3, $4, 'pending', NOW())`,
+            [
+              id,
+              pretiumResponse.transaction_code,
+              merchantAccount,
+              paymentRequest.amount_kes_cents,
+            ]
+          );
 
-        // 10. Audit log
-        await client.query(
-          `INSERT INTO audit_logs (user_id, escrow_id, payment_request_id, action, resource_type, resource_id, status, new_values)
-           VALUES ($1, $2, $3, 'payment_request.executed', 'payment_requests', $3, 'success', $4)`,
-          [
-            userId,
-            paymentRequest.escrow_id,
-            id,
-            JSON.stringify({
-              amount_kes: amountKes,
-              pretium_transaction_code: pretiumResponse.transaction_code,
-              transaction_hash: transactionHash,
-            }),
-          ]
-        );
+          // 9. Audit log
+          await client2.query(
+            `INSERT INTO audit_logs (user_id, escrow_id, payment_request_id, action, resource_type, resource_id, status, new_values)
+             VALUES ($1, $2, $3, 'payment_request.executed', 'payment_requests', $3, 'success', $4)`,
+            [
+              userId,
+              paymentRequest.escrow_id,
+              id,
+              JSON.stringify({
+                amount_kes: amountKes,
+                pretium_transaction_code: pretiumResponse.transaction_code,
+                transaction_hash: transactionHash,
+              }),
+            ]
+          );
 
-        await client.query('COMMIT');
+          await client2.query('COMMIT');
+        } finally {
+          client2.release();
+        }
 
         return reply.send({
           success: true,
@@ -910,11 +914,8 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           status: 'processing',
         });
       } catch (error: any) {
-        await client.query('ROLLBACK');
         fastify.log.error('Execute payment error:', error);
         return reply.status(500).send({ error: error.message });
-      } finally {
-        client.release();
       }
     }
   );
