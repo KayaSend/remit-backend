@@ -107,9 +107,14 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
       }
 
       // 4️⃣ Auto-execute: trigger M-Pesa off-ramp via Pretium
+      fastify.log.info({ paymentRequestId }, 'Starting auto-execute flow');
+      
       const client = await pool.connect();
+      fastify.log.info({ paymentRequestId }, 'Database client acquired');
+      
       try {
         await client.query('BEGIN');
+        fastify.log.info({ paymentRequestId }, 'Transaction BEGIN completed');
 
         // Decrypt merchant account (phone number for M-Pesa)
         const { rows: prRows } = await client.query(
@@ -119,13 +124,21 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
            FOR UPDATE`,
           [paymentRequestId]
         );
+        fastify.log.info({ paymentRequestId, rowCount: prRows.length }, 'Payment request fetched for execution');
 
         const merchantAccount = prRows[0]?.merchant_account_encrypted
           ? decrypt(prRows[0].merchant_account_encrypted)
           : null;
+        
+        fastify.log.info({ 
+          paymentRequestId, 
+          hasMerchantAccount: !!merchantAccount,
+          merchantAccountLength: merchantAccount?.length 
+        }, 'Merchant account decrypted');
 
         if (!merchantAccount) {
           await client.query('ROLLBACK');
+          fastify.log.error({ paymentRequestId }, 'Missing merchant account, rolling back');
           return reply.status(400).send({
             error: 'Missing merchant account information',
             paymentRequestId,
@@ -141,10 +154,17 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
            WHERE payment_request_id = $1`,
           [paymentRequestId]
         );
+        fastify.log.info({ paymentRequestId }, 'Payment request status updated to processing');
 
         // Generate a unique transaction hash for Pretium
         const transactionHash = `0x${randomUUID().replace(/-/g, '')}${randomUUID().replace(/-/g, '')}`.slice(0, 66);
         const amountKes = Number(prRows[0].amount_kes_cents) / 100;
+        fastify.log.info({ 
+          paymentRequestId, 
+          transactionHash,
+          amountKes,
+          merchantAccount: merchantAccount.slice(0, 4) + '***' 
+        }, 'Calling Pretium disburseKes');
 
         // Call Pretium to initiate M-Pesa disbursement
         let pretiumResponse;
@@ -154,7 +174,16 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
             amountKes,
             transactionHash,
           });
+          fastify.log.info({ 
+            paymentRequestId, 
+            transactionCode: pretiumResponse?.transaction_code 
+          }, 'Pretium disbursement successful');
         } catch (pretiumError: any) {
+          fastify.log.error({ 
+            paymentRequestId, 
+            error: pretiumError?.message,
+            stack: pretiumError?.stack 
+          }, 'Pretium disbursement failed');
           // Rollback status to approved if Pretium fails — funds are already deducted
           await client.query(
             `UPDATE payment_requests
