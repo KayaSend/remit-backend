@@ -3,12 +3,14 @@ import { pool } from '../services/database.js';
 import { createPaymentRequestWithDailyLimit } from '../services/dailySpendService.js';
 import { approvePaymentRequest } from '../services/database.js';
 import { disburseKes } from '../services/pretiumDisburse.js';
+import { sendBaseUsdcTransaction } from '../services/onchainService.js';
 import axios from 'axios';
 import { authMiddleware } from '../middleware/auth.js';
 import { randomUUID } from 'crypto';
 import { decrypt } from '../utils/crypto.js';
 
 const PRETIUM_BASE_URL = process.env.PRETIUM_BASE_URL || process.env.PRETIUM_API_URL!;
+const PRETIUM_API_KEY = process.env.PRETIUM_API_KEY!;
 
 async function fetchOfframpStatus(
   transactionCode: string
@@ -158,14 +160,79 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
         );
         fastify.log.info({ paymentRequestId }, 'Payment request status updated to processing');
 
-        // Generate a unique transaction hash for Pretium
-        const transactionHash = `0x${randomUUID().replace(/-/g, '')}${randomUUID().replace(/-/g, '')}`.slice(0, 66);
         const amountKes = Number(prRows[0].amount_kes_cents) / 100;
-        fastify.log.info({ 
-          paymentRequestId, 
+        const amountUsd = body.amountUsdCents / 100;
+
+        // Send real USDC on-chain to Pretium's settlement wallet
+        fastify.log.info({ paymentRequestId, amountUsd }, 'Fetching Pretium settlement wallet');
+
+        let transactionHash: string;
+        try {
+          // Fetch Pretium's Base settlement wallet address
+          const accountRes = await axios.post(
+            `${PRETIUM_BASE_URL}/account/detail`,
+            {},
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': PRETIUM_API_KEY,
+              },
+              timeout: 10000,
+            }
+          );
+
+          const baseNetwork = accountRes.data?.data?.networks?.find(
+            (n: any) => n.name.toLowerCase() === 'base'
+          );
+
+          if (!baseNetwork?.settlement_wallet_address) {
+            throw new Error('BASE settlement wallet not found from Pretium');
+          }
+
+          fastify.log.info({
+            paymentRequestId,
+            settlementWallet: baseNetwork.settlement_wallet_address,
+            amountUsd,
+          }, 'Sending USDC to Pretium settlement wallet');
+
+          // Send real USDC on Base mainnet
+          transactionHash = await sendBaseUsdcTransaction({
+            toAddress: baseNetwork.settlement_wallet_address,
+            amountUsd,
+          });
+
+          fastify.log.info({ paymentRequestId, transactionHash }, 'USDC sent on-chain successfully');
+        } catch (onchainError: any) {
+          // Rollback status to approved if on-chain transfer fails
+          await client.query(
+            `UPDATE payment_requests
+             SET status = 'approved',
+                 onchain_status = 'failed',
+                 updated_at = NOW()
+             WHERE payment_request_id = $1`,
+            [paymentRequestId]
+          );
+          await client.query('COMMIT');
+
+          fastify.log.error({
+            paymentRequestId,
+            error: onchainError?.message,
+            stack: onchainError?.stack,
+          }, 'On-chain USDC transfer failed');
+          return reply.status(202).send({
+            success: true,
+            paymentRequestId,
+            paymentId: paymentRequestId,
+            status: 'approved',
+            error: 'On-chain USDC transfer failed: ' + (onchainError?.message || 'Unknown error'),
+          });
+        }
+
+        fastify.log.info({
+          paymentRequestId,
           transactionHash,
           amountKes,
-          merchantAccount: merchantAccount.slice(0, 4) + '***' 
+          merchantAccount: merchantAccount.slice(0, 4) + '***'
         }, 'Calling Pretium disburseKes');
 
         // Call Pretium to initiate M-Pesa disbursement
@@ -667,13 +734,56 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           [id]
         );
 
-        // 6. Generate a unique transaction hash for Pretium
-        // In production with smart contracts, this would be the on-chain tx hash
-        const transactionHash = `0x${randomUUID().replace(/-/g, '')}${randomUUID().replace(/-/g, '')}`.slice(0, 66);
+        // 6. Send real USDC on-chain to Pretium's settlement wallet
+        const amountKes = Number(paymentRequest.amount_kes_cents) / 100;
+        const amountUsd = Number(paymentRequest.amount_usd_cents) / 100;
+
+        let transactionHash: string;
+        try {
+          const accountRes = await axios.post(
+            `${PRETIUM_BASE_URL}/account/detail`,
+            {},
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': PRETIUM_API_KEY,
+              },
+              timeout: 10000,
+            }
+          );
+
+          const baseNetwork = accountRes.data?.data?.networks?.find(
+            (n: any) => n.name.toLowerCase() === 'base'
+          );
+
+          if (!baseNetwork?.settlement_wallet_address) {
+            throw new Error('BASE settlement wallet not found from Pretium');
+          }
+
+          transactionHash = await sendBaseUsdcTransaction({
+            toAddress: baseNetwork.settlement_wallet_address,
+            amountUsd,
+          });
+
+          fastify.log.info({ id, transactionHash }, 'USDC sent on-chain for execute');
+        } catch (onchainError: any) {
+          await client.query(
+            `UPDATE payment_requests
+             SET status = 'approved',
+                 onchain_status = 'failed',
+                 updated_at = NOW()
+             WHERE payment_request_id = $1`,
+            [id]
+          );
+          await client.query('COMMIT');
+
+          fastify.log.error('On-chain USDC transfer failed:', onchainError);
+          return reply.status(502).send({
+            error: 'On-chain USDC transfer failed: ' + (onchainError.message || 'Unknown error'),
+          });
+        }
 
         // 7. Call Pretium to initiate M-Pesa disbursement
-        const amountKes = Number(paymentRequest.amount_kes_cents) / 100;
-        
         let pretiumResponse;
         try {
           pretiumResponse = await disburseKes({
@@ -692,9 +802,9 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
             [id]
           );
           await client.query('COMMIT');
-          
+
           fastify.log.error('Pretium disbursement failed:', pretiumError);
-          return reply.status(502).send({ 
+          return reply.status(502).send({
             error: 'Payment execution failed: ' + (pretiumError.message || 'M-Pesa service unavailable')
           });
         }
