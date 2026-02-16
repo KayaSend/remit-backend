@@ -85,7 +85,7 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           approverUserId: 'system-auto-approve',
         });
       } catch (approveError: any) {
-        fastify.log.error('Auto-approve failed:', approveError);
+        fastify.log.error({ err: approveError }, 'Auto-approve failed');
         return reply.status(400).send({
           error: `Auto-approve failed: ${approveError.message}`,
           paymentRequestId,
