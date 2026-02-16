@@ -1,13 +1,15 @@
 import 'dotenv/config';
 import { buildApp } from './app.js';
 
-// 🔥 ONLY START WORKERS IF REDIS IS AVAILABLE
-if (process.env.REDIS_URL) {
-  console.log('✅ Redis configured - initializing workers');
+// 🔥 Workers disabled for demo — they burn Redis quota polling for jobs
+// The payment flow works via direct HTTP calls (Pretium), no queues needed.
+// To re-enable: set ENABLE_WORKERS=true in environment variables.
+if (process.env.ENABLE_WORKERS === 'true' && process.env.REDIS_URL) {
+  console.log('✅ Redis configured + ENABLE_WORKERS=true - initializing workers');
   import('./workers/usdcSpender.js');
   import('./workers/smartContractWorkers.js');
 } else {
-  console.log('⚠️ Redis not configured - workers disabled');
+  console.log('⚠️ Workers disabled (ENABLE_WORKERS not set or no REDIS_URL) — saves Redis quota');
 }
 
 const PORT = Number(process.env.PORT) || 3000;

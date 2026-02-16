@@ -12,16 +12,16 @@ import contractEventMonitor, { ContractEventMonitor } from '../services/contract
 import { Queue } from 'bullmq';
 import { authMiddleware } from '../middleware/auth.js';
 
-// Admin queues (only create if Redis is available)
+// Admin queues (only create if workers are enabled)
 let adminQueue: Queue | null = null;
 let deploymentQueue: Queue | null = null;
 
 try {
-  if (process.env.REDIS_URL) {
-    adminQueue = new Queue('escrow-refund', { 
+  if (process.env.ENABLE_WORKERS === 'true' && process.env.REDIS_URL) {
+    adminQueue = new Queue('escrow-refund', {
       connection: { url: process.env.REDIS_URL }
     });
-    deploymentQueue = new Queue('contract-deployment', { 
+    deploymentQueue = new Queue('contract-deployment', {
       connection: { url: process.env.REDIS_URL }
     });
   }

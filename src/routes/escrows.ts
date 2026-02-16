@@ -7,11 +7,11 @@ import { Queue } from 'bullmq';
 import { getEscrowDetails } from '../services/onchainService.js';
 import { encrypt, hashForLookup } from '../utils/crypto.js';
 
-// Queue for blockchain operations (only if Redis is available)
+// Queue for blockchain operations (only if workers are enabled)
 let escrowQueue: Queue | null = null;
 try {
-  if (process.env.REDIS_URL) {
-    escrowQueue = new Queue('escrow-creation', { 
+  if (process.env.ENABLE_WORKERS === 'true' && process.env.REDIS_URL) {
+    escrowQueue = new Queue('escrow-creation', {
       connection: { url: process.env.REDIS_URL }
     });
   }
