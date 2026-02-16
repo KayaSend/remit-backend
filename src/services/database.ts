@@ -206,6 +206,10 @@ export async function approvePaymentRequest(input: ApprovePaymentInput): Promise
             [input.escrowId]
         );
 
+        if (escrowResult.rows.length === 0) {
+            throw new Error(`Escrow not found: ${input.escrowId}`);
+        }
+
         const escrow = escrowResult.rows[0];
 
         if (escrow.status !== 'active') {
@@ -224,6 +228,10 @@ export async function approvePaymentRequest(input: ApprovePaymentInput): Promise
        FOR UPDATE`,
             [input.categoryId]
         );
+
+        if (categoryResult.rows.length === 0) {
+            throw new Error(`Category not found: ${input.categoryId}`);
+        }
 
         const category = categoryResult.rows[0];
 
