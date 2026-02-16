@@ -89,7 +89,7 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           escrowId: body.escrowId,
           categoryId: body.categoryId,
           amountUsdCents: body.amountUsdCents,
-          approverUserId: 'system-auto-approve',
+          approverUserId: null, // System auto-approval
         });
         
         fastify.log.info({ paymentRequestId }, 'Auto-approve succeeded');
@@ -204,7 +204,7 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           `INSERT INTO audit_logs (user_id, escrow_id, payment_request_id, action, resource_type, resource_id, status, new_values)
            VALUES ($1, $2, $3, 'payment_request.auto_executed', 'payment_requests', $3, 'success', $4)`,
           [
-            'system-auto-approve',
+            null, // System auto-approval
             body.escrowId,
             paymentRequestId,
             JSON.stringify({

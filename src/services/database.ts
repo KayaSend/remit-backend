@@ -39,7 +39,7 @@ export interface CreateEscrowInput {
 
 export interface ApprovePaymentInput {
     paymentRequestId: string;
-    approverUserId: string;
+    approverUserId: string | null;
     escrowId: string;
     categoryId: string;
     amountUsdCents: number;
