@@ -56,6 +56,14 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           return reply.status(400).send({ error: 'Missing required fields' });
         }
 
+        // Validate minimum M-Pesa amount early (before deducting daily spend or escrow)
+        const requestedKes = Number(body.amountKesCents) / 100;
+        if (requestedKes < 20) {
+          return reply.status(400).send({
+            error: `Minimum M-Pesa disbursement is KES 20. You requested KES ${requestedKes}.`,
+          });
+        }
+
       // 1️⃣ Fetch recipient from escrow
       const escrowRes = await pool.query(
         `SELECT recipient_id
@@ -162,6 +170,26 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
 
         const amountKes = Number(prRows[0].amount_kes_cents) / 100;
         const amountUsd = body.amountUsdCents / 100;
+
+        // Validate minimum M-Pesa amount BEFORE sending USDC on-chain
+        const PRETIUM_MIN_KES = 20;
+        if (amountKes < PRETIUM_MIN_KES) {
+          await client.query(
+            `UPDATE payment_requests
+             SET status = 'approved',
+                 onchain_status = 'pending',
+                 updated_at = NOW()
+             WHERE payment_request_id = $1`,
+            [paymentRequestId]
+          );
+          await client.query('COMMIT');
+
+          fastify.log.error({ paymentRequestId, amountKes, PRETIUM_MIN_KES }, 'Amount below Pretium minimum');
+          return reply.status(400).send({
+            error: `Minimum M-Pesa disbursement is KES ${PRETIUM_MIN_KES}. You requested KES ${amountKes}.`,
+            paymentRequestId,
+          });
+        }
 
         // Send real USDC on-chain to Pretium's settlement wallet
         fastify.log.info({ paymentRequestId, amountUsd }, 'Fetching Pretium settlement wallet');
@@ -734,10 +762,27 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           [id]
         );
 
-        // 6. Send real USDC on-chain to Pretium's settlement wallet
+        // 6. Validate minimum M-Pesa amount BEFORE sending USDC on-chain
         const amountKes = Number(paymentRequest.amount_kes_cents) / 100;
         const amountUsd = Number(paymentRequest.amount_usd_cents) / 100;
+        const PRETIUM_MIN_KES = 20;
 
+        if (amountKes < PRETIUM_MIN_KES) {
+          await client.query(
+            `UPDATE payment_requests
+             SET status = 'approved',
+                 onchain_status = 'pending',
+                 updated_at = NOW()
+             WHERE payment_request_id = $1`,
+            [id]
+          );
+          await client.query('COMMIT');
+          return reply.status(400).send({
+            error: `Minimum M-Pesa disbursement is KES ${PRETIUM_MIN_KES}. You requested KES ${amountKes}.`,
+          });
+        }
+
+        // 7. Send real USDC on-chain to Pretium's settlement wallet
         let transactionHash: string;
         try {
           const accountRes = await axios.post(

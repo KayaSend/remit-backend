@@ -46,6 +46,11 @@ export async function offrampRoutes(fastify: FastifyInstance) {
       // Get the actual KES amount from payment request
       const actualAmountKes = Number(paymentRequest.amount_kes_cents) / 100;
 
+      // Validate minimum M-Pesa amount
+      if (actualAmountKes < 20) {
+        throw new Error(`Minimum M-Pesa disbursement is KES 20. Amount is KES ${actualAmountKes}.`);
+      }
+
       // Verify amount matches
       if (Math.abs(actualAmountKes - amountKes) > 0.01) {
         throw new Error(`Amount mismatch. Expected ${actualAmountKes} KES, got ${amountKes} KES`);
