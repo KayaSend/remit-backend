@@ -36,21 +36,23 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
     '/payment-requests',
     { preHandler: authMiddleware },
     async (request, reply) => {
-      const body = request.body as any;
+      try {
+        fastify.log.info('POST /payment-requests handler started');
+        const body = request.body as any;
 
-      const required = [
-        body.escrowId,
-        body.categoryId,
-        body.amountKesCents,
-        body.amountUsdCents,
-        body.exchangeRate,
-        body.merchantName,
-        body.merchantAccount,
-      ];
+        const required = [
+          body.escrowId,
+          body.categoryId,
+          body.amountKesCents,
+          body.amountUsdCents,
+          body.exchangeRate,
+          body.merchantName,
+          body.merchantAccount,
+        ];
 
-      if (required.some(v => !v)) {
-        return reply.status(400).send({ error: 'Missing required fields' });
-      }
+        if (required.some(v => !v)) {
+          return reply.status(400).send({ error: 'Missing required fields' });
+        }
 
       // 1️⃣ Fetch recipient from escrow
       const escrowRes = await pool.query(
@@ -261,6 +263,17 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({ error: error.message, paymentRequestId });
       } finally {
         client.release();
+      }
+      } catch (handlerError: any) {
+        fastify.log.error({ 
+          error: handlerError, 
+          message: handlerError?.message, 
+          stack: handlerError?.stack 
+        }, 'FATAL: Unhandled error in POST /payment-requests handler');
+        return reply.status(500).send({ 
+          error: 'Internal server error', 
+          details: handlerError?.message 
+        });
       }
     }
   );
