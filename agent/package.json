@@ -1,0 +1,19 @@
+{
+  "name": "kaya-agent",
+  "version": "1.0.0",
+  "description": "KayaSend x402 autonomous payment agent",
+  "main": "kayaAgent.js",
+  "type": "module",
+  "scripts": {
+    "start": "node kayaAgent.js",
+    "dev": "node --watch kayaAgent.js"
+  },
+  "keywords": ["x402", "agent", "remittance", "m-pesa"],
+  "author": "KayaSend",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.5",
+    "dotenv": "^17.3.1",
+    "ethers": "^6.16.0"
+  }
+}

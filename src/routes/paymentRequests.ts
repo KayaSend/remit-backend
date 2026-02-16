@@ -73,18 +73,152 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
         onchainStatus: 'pending',
       });
 
-      // Generate unique payment ID for tracking
-      const paymentId = randomUUID();
+      const paymentRequestId = paymentRequest.paymentRequestId;
 
-      // Note: On-chain execution and off-ramp will be handled in Step 9
-      // For now, payment request is created with status 'pending_approval'
+      // 3️⃣ Auto-approve: deduct escrow + category balances atomically
+      try {
+        await approvePaymentRequest({
+          paymentRequestId,
+          escrowId: body.escrowId,
+          categoryId: body.categoryId,
+          amountUsdCents: body.amountUsdCents,
+          approverUserId: 'system-auto-approve',
+        });
+      } catch (approveError: any) {
+        fastify.log.error('Auto-approve failed:', approveError);
+        return reply.status(400).send({
+          error: `Auto-approve failed: ${approveError.message}`,
+          paymentRequestId,
+        });
+      }
 
-      return reply.status(202).send({
-        success: true,
-        paymentRequestId: paymentRequest.paymentRequestId,
-        paymentId,
-        status: 'pending_approval',
-      });
+      // 4️⃣ Auto-execute: trigger M-Pesa off-ramp via Pretium
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Decrypt merchant account (phone number for M-Pesa)
+        const { rows: prRows } = await client.query(
+          `SELECT merchant_account_encrypted, amount_kes_cents
+           FROM payment_requests
+           WHERE payment_request_id = $1
+           FOR UPDATE`,
+          [paymentRequestId]
+        );
+
+        const merchantAccount = prRows[0]?.merchant_account_encrypted
+          ? decrypt(prRows[0].merchant_account_encrypted)
+          : null;
+
+        if (!merchantAccount) {
+          await client.query('ROLLBACK');
+          return reply.status(400).send({
+            error: 'Missing merchant account information',
+            paymentRequestId,
+          });
+        }
+
+        // Update status to processing
+        await client.query(
+          `UPDATE payment_requests
+           SET status = 'processing',
+               onchain_status = 'pending',
+               updated_at = NOW()
+           WHERE payment_request_id = $1`,
+          [paymentRequestId]
+        );
+
+        // Generate a unique transaction hash for Pretium
+        const transactionHash = `0x${randomUUID().replace(/-/g, '')}${randomUUID().replace(/-/g, '')}`.slice(0, 66);
+        const amountKes = Number(prRows[0].amount_kes_cents) / 100;
+
+        // Call Pretium to initiate M-Pesa disbursement
+        let pretiumResponse;
+        try {
+          pretiumResponse = await disburseKes({
+            phone: merchantAccount,
+            amountKes,
+            transactionHash,
+          });
+        } catch (pretiumError: any) {
+          // Rollback status to approved if Pretium fails — funds are already deducted
+          await client.query(
+            `UPDATE payment_requests
+             SET status = 'approved',
+                 onchain_status = 'pending',
+                 updated_at = NOW()
+             WHERE payment_request_id = $1`,
+            [paymentRequestId]
+          );
+          await client.query('COMMIT');
+
+          fastify.log.error('Pretium disbursement failed:', pretiumError);
+          return reply.status(202).send({
+            success: true,
+            paymentRequestId,
+            paymentId: paymentRequestId,
+            status: 'approved',
+            error: 'M-Pesa disbursement failed, payment approved but not yet sent',
+          });
+        }
+
+        // Store offramp transaction
+        await client.query(
+          `INSERT INTO offramp_transactions (
+            payment_request_id,
+            pretium_transaction_code,
+            phone_number,
+            amount_kes_cents,
+            status,
+            created_at
+          ) VALUES ($1, $2, $3, $4, 'pending', NOW())`,
+          [paymentRequestId, pretiumResponse.transaction_code, merchantAccount, prRows[0].amount_kes_cents]
+        );
+
+        // Update payment request with transaction hash
+        await client.query(
+          `UPDATE payment_requests
+           SET onchain_status = 'broadcasted',
+               onchain_transaction_hash = $1,
+               updated_at = NOW()
+           WHERE payment_request_id = $2`,
+          [transactionHash, paymentRequestId]
+        );
+
+        // Audit log
+        await client.query(
+          `INSERT INTO audit_logs (user_id, escrow_id, payment_request_id, action, resource_type, resource_id, status, new_values)
+           VALUES ($1, $2, $3, 'payment_request.auto_executed', 'payment_requests', $3, 'success', $4)`,
+          [
+            'system-auto-approve',
+            body.escrowId,
+            paymentRequestId,
+            JSON.stringify({
+              amount_kes: amountKes,
+              pretium_transaction_code: pretiumResponse.transaction_code,
+              transaction_hash: transactionHash,
+            }),
+          ]
+        );
+
+        await client.query('COMMIT');
+
+        return reply.status(202).send({
+          success: true,
+          paymentRequestId,
+          paymentId: paymentRequestId,
+          transactionCode: pretiumResponse.transaction_code,
+          transactionHash,
+          amountKes,
+          status: 'processing',
+        });
+      } catch (error: any) {
+        await client.query('ROLLBACK');
+        fastify.log.error('Auto-execute error:', error);
+        return reply.status(500).send({ error: error.message, paymentRequestId });
+      } finally {
+        client.release();
+      }
     }
   );
 
