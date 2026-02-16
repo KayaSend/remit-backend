@@ -77,6 +77,13 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
 
       // 3️⃣ Auto-approve: deduct escrow + category balances atomically
       try {
+        fastify.log.info({ 
+          paymentRequestId,
+          escrowId: body.escrowId,
+          categoryId: body.categoryId,
+          amountUsdCents: body.amountUsdCents
+        }, 'Attempting auto-approve');
+        
         await approvePaymentRequest({
           paymentRequestId,
           escrowId: body.escrowId,
@@ -84,10 +91,17 @@ export async function paymentRequestRoutes(fastify: FastifyInstance) {
           amountUsdCents: body.amountUsdCents,
           approverUserId: 'system-auto-approve',
         });
+        
+        fastify.log.info({ paymentRequestId }, 'Auto-approve succeeded');
       } catch (approveError: any) {
-        fastify.log.error({ err: approveError }, 'Auto-approve failed');
+        fastify.log.error({ 
+          err: approveError,
+          message: approveError?.message,
+          stack: approveError?.stack,
+          paymentRequestId 
+        }, 'Auto-approve failed');
         return reply.status(400).send({
-          error: `Auto-approve failed: ${approveError.message}`,
+          error: `Auto-approve failed: ${approveError?.message || String(approveError)}`,
           paymentRequestId,
         });
       }
